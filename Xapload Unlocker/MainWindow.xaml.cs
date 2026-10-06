@@ -41,10 +41,10 @@ namespace Xapload_Unlocker
         [DllImport("kernel32.dll")]
         static extern bool SetFileAttributes(string lpFileName, uint dwFileAttributes);
 
-        public string[] Drive = new string[2];
-        string[] PhysicalDrive = new string[2];
-        string[] VolumeLabel = new string[2];
+        public List<string> Drive = new List<string>();
         bool result = false;
+        int detectedIndex = -1;
+        private const int DetectionTimeoutSeconds = 10;
         string registryFile;
         bool isDeveloperUnlocked = false;
         bool isInteropUnlocked = false;
@@ -65,67 +65,129 @@ namespace Xapload_Unlocker
             {
                 try
                 {
-                    while (!result)
+                    DateTime startTime = DateTime.Now;
+                    while (!result && (DateTime.Now - startTime).TotalSeconds < DetectionTimeoutSeconds)
                     {
-                        int i = 0;
-                        foreach (ManagementObject logical in new ManagementObjectSearcher("select * from Win32_LogicalDisk").Get())
+                        DetectPhoneDevices();
+                        if (!result)
                         {
-                            string Label = string.Empty;
-                            foreach (ManagementObject partition in logical.GetRelated("Win32_DiskPartition"))
-                            {
-                                foreach (ManagementObject drive in partition.GetRelated("Win32_DiskDrive"))
-                                {
-                                    if (drive["PNPDeviceID"].ToString().Contains("VEN_QUALCOMM&PROD_MMC_STORAGE") || drive["PNPDeviceID"].ToString().Contains("VEN_MSFT&PROD_PHONE_MMC_STOR") || drive["PNPDeviceID"].ToString().Contains("VEN_MSFT&PROD_VIRTUAL_DISK") || drive["PNPDeviceID"].ToString().Contains("VEN_PASSMARK&PROD_OSFDISK"))
-                                    {
-                                        Label = logical["VolumeName"] == null ? "" : logical["VolumeName"].ToString();
-                                        if ((Drive[i] == null) || string.Equals(Label, "MainOS", StringComparison.CurrentCultureIgnoreCase))
-                                        {
-                                            Drive[i] = logical["Name"].ToString();
-                                            PhysicalDrive[i] = drive["DeviceID"].ToString();
-                                            VolumeLabel[i] = Label;
-                                            Dispatcher.Invoke(() =>
-                                            {
-                                                DriveCombo.Items.Add($"{VolumeLabel[i]} ({Drive[i]})");
-                                            });
-                                            i++;
-                                        }
-                                        if (string.Equals(Label, "MainOS", StringComparison.CurrentCultureIgnoreCase))
-                                        {
-                                            result = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (string.Equals(Label, "MainOS", StringComparison.CurrentCultureIgnoreCase))
-                                {
-                                    result = true;
-                                    break;
-                                }
-                            }
+                            Thread.Sleep(250);
                         }
                     }
                     Dispatcher.Invoke(() =>
                     {
-                        DeviceBlock.Text = $"Mass Storage Mode connected: ";
-                        DriveCombo.SelectedIndex = 0;
-                        DriveCombo.Visibility = Visibility.Visible;
-                        UnlockBtn.IsEnabled = true;
-                        CheckSupport();
+                        if (result)
+                        {
+                            DeviceBlock.Text = $"Mass Storage Mode connected: ";
+                            DriveCombo.SelectedIndex = detectedIndex >= 0 ? detectedIndex : 0;
+                            DriveCombo.Visibility = Visibility.Visible;
+                            UnlockBtn.IsEnabled = true;
+                            CheckSupport();
+                        }
+                        else
+                        {
+                            // The phone partition could not be detected automatically, so
+                            // let the user pick the drive letter instead of waiting forever.
+                            ShowManualSelection();
+                        }
+                        ScanBtn.Visibility = Visibility.Visible;
+                        ScanBtn.IsEnabled = true;
                     });
                 }
                 catch { }
             });
         }
 
+        /// <summary>
+        /// Scans the connected disks for a Windows Phone mass storage partition and adds
+        /// every phone partition found to the drive list. Stops as soon as the partition
+        /// labelled "MainOS" is found so it can be selected automatically.
+        /// </summary>
+        private void DetectPhoneDevices()
+        {
+            foreach (ManagementObject logical in new ManagementObjectSearcher("select * from Win32_LogicalDisk").Get())
+            {
+                string name = logical["Name"] == null ? null : logical["Name"].ToString();
+                if (string.IsNullOrEmpty(name) || Drive.Contains(name))
+                {
+                    continue;
+                }
+                string label = logical["VolumeName"] == null ? "" : logical["VolumeName"].ToString();
+                bool isPhone = false;
+                foreach (ManagementObject partition in logical.GetRelated("Win32_DiskPartition"))
+                {
+                    foreach (ManagementObject drive in partition.GetRelated("Win32_DiskDrive"))
+                    {
+                        string pnpDeviceId = drive["PNPDeviceID"] == null ? "" : drive["PNPDeviceID"].ToString();
+                        if (pnpDeviceId.Contains("VEN_QUALCOMM&PROD_MMC_STORAGE") || pnpDeviceId.Contains("VEN_MSFT&PROD_PHONE_MMC_STOR") || pnpDeviceId.Contains("VEN_MSFT&PROD_VIRTUAL_DISK") || pnpDeviceId.Contains("VEN_PASSMARK&PROD_OSFDISK"))
+                        {
+                            isPhone = true;
+                            break;
+                        }
+                    }
+                    if (isPhone)
+                    {
+                        break;
+                    }
+                }
+                if (!isPhone)
+                {
+                    continue;
+                }
+                Drive.Add(name);
+                Dispatcher.Invoke(() => DriveCombo.Items.Add($"{label} ({name})"));
+                if (string.Equals(label, "MainOS", StringComparison.CurrentCultureIgnoreCase))
+                {
+                    detectedIndex = Drive.Count - 1;
+                    result = true;
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Fills the drive list with every disk available on the machine so the user can
+        /// select the correct partition letter when it cannot be detected automatically.
+        /// </summary>
+        private void ShowManualSelection()
+        {
+            Drive.Clear();
+            DriveCombo.Items.Clear();
+            DriveCombo.SelectedIndex = -1;
+            foreach (ManagementObject logical in new ManagementObjectSearcher("select * from Win32_LogicalDisk").Get())
+            {
+                string name = logical["Name"] == null ? null : logical["Name"].ToString();
+                if (string.IsNullOrEmpty(name))
+                {
+                    continue;
+                }
+                string label = logical["VolumeName"] == null ? "" : logical["VolumeName"].ToString();
+                Drive.Add(name);
+                DriveCombo.Items.Add(string.IsNullOrEmpty(label) ? name : $"{label} ({name})");
+            }
+            DriveCombo.SelectedIndex = -1;
+            DriveCombo.Visibility = Visibility.Visible;
+            flag = true;
+            DeviceBlock.Text = DriveCombo.Items.Count > 0
+                ? "Device not detected. Select the drive letter manually: "
+                : "Device not detected. Connect the device and scan again. ";
+        }
+
         private async void CheckSupport()
         {
-            if (File.Exists($"{Drive[DriveCombo.SelectedIndex]}\\Windows\\Packages\\registryFiles\\OEMsettings.reg"))
+            if (DriveCombo.SelectedIndex < 0 || DriveCombo.SelectedIndex >= Drive.Count)
             {
-                registryFile = $"{Drive[DriveCombo.SelectedIndex]}\\Windows\\Packages\\registryFiles\\OEMsettings.reg";
+                return;
             }
-            else if (File.Exists($"{Drive[DriveCombo.SelectedIndex]}\\Windows\\Packages\\registryFiles\\SOFTWARE.reg"))
+            string drive = Drive[DriveCombo.SelectedIndex];
+            registryFile = null;
+            if (File.Exists($"{drive}\\Windows\\Packages\\registryFiles\\OEMsettings.reg"))
             {
-                registryFile = $"{Drive[DriveCombo.SelectedIndex]}\\Windows\\Packages\\registryFiles\\SOFTWARE.reg";
+                registryFile = $"{drive}\\Windows\\Packages\\registryFiles\\OEMsettings.reg";
+            }
+            else if (File.Exists($"{drive}\\Windows\\Packages\\registryFiles\\SOFTWARE.reg"))
+            {
+                registryFile = $"{drive}\\Windows\\Packages\\registryFiles\\SOFTWARE.reg";
             }
             else
             {
@@ -188,19 +250,37 @@ namespace Xapload_Unlocker
 
         private void DriveCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (flag)
+            if (!flag || DriveCombo.SelectedIndex < 0 || DriveCombo.SelectedIndex >= Drive.Count)
             {
-                UnlockBtn.IsEnabled = true;
-                CheckSupport();
+                return;
             }
+            UnlockBtn.IsEnabled = true;
+            CheckSupport();
         }
 
         private void UnlockTypeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (flag)
+            if (flag && !string.IsNullOrEmpty(registryFile))
             {
                 IsPermUnlocked();
             }
+        }
+
+        private async void ScanBtn_Click(object sender, RoutedEventArgs e)
+        {
+            ScanBtn.IsEnabled = false;
+            UnlockBtn.IsEnabled = false;
+            UnlockBtn.Content = "Unlock";
+            registryFile = null;
+            result = false;
+            detectedIndex = -1;
+            flag = false;
+            Drive.Clear();
+            DriveCombo.Items.Clear();
+            DriveCombo.SelectedIndex = -1;
+            DriveCombo.Visibility = Visibility.Collapsed;
+            DeviceBlock.Text = "Waiting for device to connect into Mass Storage Mode...";
+            await GetDevices();
         }
 
         private async void UnlockBtn_Click(object sender, RoutedEventArgs e)

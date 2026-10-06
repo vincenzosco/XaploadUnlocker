@@ -187,6 +187,7 @@
                 <StackPanel Margin="0,25,0,0" Orientation="Horizontal" HorizontalAlignment="Center">
                     <TextBlock Name="DeviceBlock" Text="Waiting for device to connect into Mass Storage Mode..." HorizontalAlignment="Center" Margin="0,0,5,0"/>
                     <ComboBox Name="DriveCombo" MinWidth="80" Visibility="Collapsed" Style="{DynamicResource theComboBox}" SelectionChanged="DriveCombo_SelectionChanged"/>
+                    <Button Name="ScanBtn" Content="Scan" MinWidth="60" Margin="5,0,0,0" Visibility="Collapsed" Style="{DynamicResource RoundButton}" Click="ScanBtn_Click"/>
                 </StackPanel>
                 <StackPanel Margin="0,25,0,0" Orientation="Horizontal" HorizontalAlignment="Center">
                     <TextBlock Text="Unlock type: " Margin="0,0,5,0"/>
